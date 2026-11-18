@@ -1,0 +1,43 @@
+name: Publish to the Chrome Web Store
+description: >-
+  Uploads a package to an existing Chrome Web Store item and submits it for review (Chrome Web Store API v2). Needs
+  Node 22.18 or newer.
+inputs:
+  package:
+    description: Path or glob of the zip to upload; must match exactly one file
+    required: true
+  access-token:
+    description: OAuth access token with the https://www.googleapis.com/auth/chromewebstore scope
+    required: true
+  publisher-id:
+    description: Developer Dashboard → Account → Publisher ID
+    required: true
+  extension-id:
+    description: The item's 32-letter ID
+    required: true
+  publish-type:
+    description: DEFAULT_PUBLISH (go live after review) or STAGED_PUBLISH (wait for a manual publish)
+    default: DEFAULT_PUBLISH
+  expected-version:
+    description: Fails if the uploaded package reports another version; empty skips the check
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PACKAGE: ${{ inputs.package }}
+        CWS_ACCESS_TOKEN: ${{ inputs.access-token }}
+        CWS_PUBLISHER_ID: ${{ inputs.publisher-id }}
+        CWS_EXTENSION_ID: ${{ inputs.extension-id }}
+        CWS_PUBLISH_TYPE: ${{ inputs.publish-type }}
+        CWS_EXPECTED_VERSION: ${{ inputs.expected-version }}
+      run: |
+        shopt -s nullglob
+        # shellcheck disable=SC2206 # PACKAGE may be a glob
+        files=($PACKAGE)
+        if [ "${#files[@]}" -ne 1 ]; then
+          echo "::error::package \"$PACKAGE\" matches ${#files[@]} files; it must match exactly one."
+          exit 1
+        fi
+        node "$GITHUB_ACTION_PATH/../src/cws.ts" "${files[0]}"

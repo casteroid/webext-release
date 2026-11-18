@@ -1,0 +1,43 @@
+name: Publish to Firefox Add-ons
+description: >-
+  Uploads a package and its source archive to an existing Firefox add-on on AMO as a new listed version (add-ons
+  API v5). Needs Node 22.18 or newer.
+inputs:
+  package:
+    description: Path or glob of the xpi to upload; must match exactly one file
+    required: true
+  source:
+    description: Path of the source archive reviewers build from, e.g. the output of git archive
+    required: true
+  jwt-issuer:
+    description: API key from https://addons.mozilla.org/developers/addon/api/key/ (looks like user:123:456)
+    required: true
+  jwt-secret:
+    description: API secret from the same page
+    required: true
+  addon-id:
+    description: The add-on's guid, slug or numeric id
+    required: true
+  expected-version:
+    description: Fails if the uploaded package reports another version; empty skips the check
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PACKAGE: ${{ inputs.package }}
+        SOURCE: ${{ inputs.source }}
+        AMO_JWT_ISSUER: ${{ inputs.jwt-issuer }}
+        AMO_JWT_SECRET: ${{ inputs.jwt-secret }}
+        AMO_ADDON_ID: ${{ inputs.addon-id }}
+        AMO_EXPECTED_VERSION: ${{ inputs.expected-version }}
+      run: |
+        shopt -s nullglob
+        # shellcheck disable=SC2206 # PACKAGE may be a glob
+        files=($PACKAGE)
+        if [ "${#files[@]}" -ne 1 ]; then
+          echo "::error::package \"$PACKAGE\" matches ${#files[@]} files; it must match exactly one."
+          exit 1
+        fi
+        node "$GITHUB_ACTION_PATH/../src/amo.ts" "${files[0]}" "$SOURCE"

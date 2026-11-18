@@ -1,0 +1,26 @@
+name: Lint commit messages
+description: >-
+  Fails when a commit in the pull request or push does not follow Conventional Commits. Needs a full-history checkout
+  (fetch-depth 0) and Node 22.18 or newer.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        BEFORE: ${{ github.event.before }}
+        AFTER: ${{ github.sha }}
+      run: |
+        if [ "$EVENT" = "pull_request" ]; then
+          range="$PR_BASE..$PR_HEAD"
+        elif [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+          range="$BEFORE..$AFTER"
+        elif tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$AFTER" 2>/dev/null); then
+          # New branch, or a force push left the old tip unreachable: check everything since the last release.
+          range="$tag..$AFTER"
+        else
+          range="$AFTER"
+        fi
+        node "$GITHUB_ACTION_PATH/../src/lint-commits.ts" "$range"

@@ -1,0 +1,140 @@
+name: Publish
+
+# Reusable. Uploads the packages of an existing GitHub release to the Chrome Web Store and Firefox Add-ons.
+# release.yml calls it after creating a release; an extension can also call it from a workflow_dispatch workflow
+# to retry a tag. Each store job skips with a notice when that store is not configured. See README.md.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to upload, e.g. v0.2.0
+        type: string
+        required: true
+      chrome-package:
+        description: Release asset to upload to the Chrome Web Store, e.g. *.chrome.zip; empty skips Chrome
+        type: string
+        default: ""
+      firefox-package:
+        description: Release asset to upload to Firefox Add-ons, e.g. *.firefox.xpi; empty skips Firefox
+        type: string
+        default: ""
+      node-version:
+        type: string
+        default: "22"
+    secrets:
+      AMO_JWT_ISSUER:
+        required: false
+      AMO_JWT_SECRET:
+        required: false
+
+jobs:
+  chrome:
+    if: inputs.chrome-package != ''
+    runs-on: ubuntu-latest
+    environment: chrome-web-store
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check configuration
+        id: config
+        env:
+          TAG: ${{ inputs.tag }}
+          CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+        run: |
+          if [ -z "$CWS_EXTENSION_ID" ]; then
+            echo "::notice::CWS_EXTENSION_ID is not set, so $TAG was not sent to the Chrome Web Store."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v7
+        if: steps.config.outputs.configured == 'true'
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Download release package
+        if: steps.config.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          PATTERN: ${{ inputs.chrome-package }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$PATTERN" --dir release
+
+      - name: Authenticate to Google Cloud
+        if: steps.config.outputs.configured == 'true'
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Upload and submit for review
+        if: steps.config.outputs.configured == 'true'
+        uses: $/cws
+        with:
+          package: release/${{ inputs.chrome-package }}
+          access-token: ${{ steps.auth.outputs.access_token }}
+          publisher-id: ${{ vars.CWS_PUBLISHER_ID }}
+          extension-id: ${{ vars.CWS_EXTENSION_ID }}
+          publish-type: ${{ vars.CWS_PUBLISH_TYPE || 'DEFAULT_PUBLISH' }}
+          expected-version: ${{ steps.config.outputs.version }}
+
+  firefox:
+    if: inputs.firefox-package != ''
+    runs-on: ubuntu-latest
+    environment: firefox-add-ons
+    permissions:
+      contents: read
+    steps:
+      # Secrets are not available in a job-level `if`, so this step gates the rest.
+      - name: Check configuration
+        id: config
+        env:
+          TAG: ${{ inputs.tag }}
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+          AMO_ADDON_ID: ${{ vars.AMO_ADDON_ID }}
+        run: |
+          if [ -z "$AMO_JWT_ISSUER" ] || [ -z "$AMO_JWT_SECRET" ] || [ -z "$AMO_ADDON_ID" ]; then
+            echo "::notice::AMO_JWT_ISSUER, AMO_JWT_SECRET or AMO_ADDON_ID is not set, so $TAG was not sent to Firefox Add-ons."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.config.outputs.configured == 'true'
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v7
+        if: steps.config.outputs.configured == 'true'
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Download release package and archive the source
+        if: steps.config.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          PATTERN: ${{ inputs.firefox-package }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$PATTERN" --dir release
+          git archive --format=zip -o release/source.zip HEAD
+
+      - name: Upload to Firefox Add-ons
+        if: steps.config.outputs.configured == 'true'
+        uses: $/amo
+        with:
+          package: release/${{ inputs.firefox-package }}
+          source: release/source.zip
+          jwt-issuer: ${{ secrets.AMO_JWT_ISSUER }}
+          jwt-secret: ${{ secrets.AMO_JWT_SECRET }}
+          addon-id: ${{ vars.AMO_ADDON_ID }}
+          expected-version: ${{ steps.config.outputs.version }}

@@ -1,0 +1,152 @@
+name: Release
+
+# Reusable. An extension's own Release workflow (workflow_dispatch) calls this: it works out the next version from
+# Conventional Commits, commits the version bump, tags it, creates a GitHub release with the packages, then calls
+# publish.yml to upload them to the stores. See README.md for the caller.
+on:
+  workflow_call:
+    inputs:
+      manifest:
+        description: Path to the extension's manifest.json, e.g. app/manifest.json
+        type: string
+        required: true
+      package:
+        description: Command that builds the store packages, e.g. npm run package
+        type: string
+        required: true
+      artifacts:
+        description: Glob of the files to attach to the GitHub release, e.g. packages/*
+        type: string
+        required: true
+      chrome-package:
+        description: Release asset to upload to the Chrome Web Store, e.g. *.chrome.zip; empty skips Chrome
+        type: string
+        default: ""
+      firefox-package:
+        description: Release asset to upload to Firefox Add-ons, e.g. *.firefox.xpi; empty skips Firefox
+        type: string
+        default: ""
+      check:
+        description: Command that must pass before releasing, e.g. npm run typecheck && npm test; empty skips it
+        type: string
+        default: ""
+      bump:
+        description: auto (from the commits), patch, minor or major
+        type: string
+        default: auto
+      dry-run:
+        description: Only show the version and notes that would be released
+        type: boolean
+        default: false
+      node-version:
+        type: string
+        default: "22"
+    secrets:
+      AMO_JWT_ISSUER:
+        required: false
+      AMO_JWT_SECRET:
+        required: false
+    outputs:
+      tag:
+        description: The released tag, e.g. v0.2.0
+        value: ${{ jobs.release.outputs.tag }}
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check
+        if: inputs.check != ''
+        env:
+          CHECK: ${{ inputs.check }}
+        run: bash -c "$CHECK"
+
+      - name: Plan version
+        id: plan
+        uses: $/plan
+        with:
+          manifest: ${{ inputs.manifest }}
+          bump: ${{ inputs.bump }}
+          apply: ${{ !inputs.dry-run }}
+          notes-file: ${{ runner.temp }}/notes.md
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          {
+            if [ "$DRY_RUN" = "true" ]; then echo "## Dry run: would release $TAG"; else echo "## Released $TAG"; fi
+            echo
+            cat "$RUNNER_TEMP/notes.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package
+        if: ${{ !inputs.dry-run }}
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: bash -c "$PACKAGE"
+
+      - name: Commit, tag and push
+        if: ${{ !inputs.dry-run }}
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git commit -am "chore(release): $TAG"
+          fi
+          git tag -a "$TAG" -m "$TAG"
+          git push --atomic origin HEAD:main "$TAG"
+
+      - name: Create GitHub release
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          ARTIFACTS: ${{ inputs.artifacts }}
+        run: |
+          shopt -s nullglob
+          # shellcheck disable=SC2206 # ARTIFACTS is a glob
+          files=($ARTIFACTS)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::artifacts \"$ARTIFACTS\" matches no files after the package step."
+            exit 1
+          fi
+          gh release create "$TAG" "${files[@]}" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+
+  publish:
+    needs: release
+    if: ${{ !inputs.dry-run }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: $/.github/workflows/publish.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      chrome-package: ${{ inputs.chrome-package }}
+      firefox-package: ${{ inputs.firefox-package }}
+      node-version: ${{ inputs.node-version }}
+    secrets:
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}

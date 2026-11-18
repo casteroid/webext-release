@@ -1,0 +1,42 @@
+name: Plan release
+description: >-
+  Works out the next version from Conventional Commits since the last vX.Y.Z tag. With apply, writes it into the
+  manifest, package.json and package-lock.json. Needs a full-history checkout and Node 22.18 or newer.
+inputs:
+  manifest:
+    description: Path to the extension's manifest.json, e.g. app/manifest.json
+    required: true
+  bump:
+    description: auto (from the commits), patch, minor or major
+    default: auto
+  apply:
+    description: "true writes the new version into the manifest, package.json and package-lock.json"
+    default: "false"
+  notes-file:
+    description: Where to write the Markdown release notes; empty writes none
+    default: ""
+outputs:
+  version:
+    description: Next version, e.g. 0.2.0
+    value: ${{ steps.plan.outputs.version }}
+  tag:
+    description: Next tag, e.g. v0.2.0
+    value: ${{ steps.plan.outputs.tag }}
+  previous-tag:
+    description: Last release tag, empty before the first release
+    value: ${{ steps.plan.outputs.previous_tag }}
+runs:
+  using: composite
+  steps:
+    - id: plan
+      shell: bash
+      env:
+        MANIFEST: ${{ inputs.manifest }}
+        BUMP: ${{ inputs.bump }}
+        APPLY: ${{ inputs.apply }}
+        NOTES_FILE: ${{ inputs.notes-file }}
+      run: |
+        args=(--manifest "$MANIFEST" --bump "$BUMP")
+        if [ -n "$NOTES_FILE" ]; then args+=(--notes-file "$NOTES_FILE"); fi
+        if [ "$APPLY" = "true" ]; then args+=(--apply); fi
+        node "$GITHUB_ACTION_PATH/../src/plan.ts" "${args[@]}"
