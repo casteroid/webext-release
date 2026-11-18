@@ -95,7 +95,9 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
           {
-            if [ "$DRY_RUN" = "true" ]; then echo "## Dry run: would release $TAG"; else echo "## Released $TAG"; fi
+            if [ -z "$TAG" ]; then echo "## Dry run: nothing to release"
+            elif [ "$DRY_RUN" = "true" ]; then echo "## Dry run: would release $TAG"
+            else echo "## Released $TAG"; fi
             echo
             cat "$RUNNER_TEMP/notes.md"
           } >> "$GITHUB_STEP_SUMMARY"

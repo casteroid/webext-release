@@ -5,6 +5,9 @@
  *
  * Prints the plan; with --apply writes the version into the manifest, package.json and package-lock.json.
  * Inside GitHub Actions it also writes `version`, `tag` and `previous_tag` to $GITHUB_OUTPUT.
+ *
+ * When there is nothing to release, it fails with --apply. Without --apply (a dry run) it says so, writes the
+ * same sentence to the notes file, leaves the outputs empty and exits 0.
  */
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -43,9 +46,11 @@ if (!previousTag) {
 } else {
   const bump: Bump | null = requested === "auto" ? bumpFor(commits) : requested;
   if (!bump) {
-    fail(
-      `No feat, fix, perf or breaking commits since ${previousTag}, so there is nothing to release. Choose a bump to force one.`,
-    );
+    const message = `No feat, fix, perf or breaking commits since ${previousTag}, so there is nothing to release. Choose a bump to force one.`;
+    if (values.apply) fail(message);
+    console.log(message);
+    if (values["notes-file"]) writeFileSync(values["notes-file"], `${message}\n`);
+    process.exit(0);
   }
   version = nextVersion(current, bump);
 }
