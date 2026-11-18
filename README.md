@@ -16,6 +16,7 @@ flowchart LR
 |---|---|
 | `.github/workflows/release.yml` | Reusable workflow: plan → package → commit and tag → GitHub release → publish |
 | `.github/workflows/publish.yml` | Reusable workflow: uploads a release's packages to the stores; also called on its own to retry a tag |
+| `.github/workflows/build.yml` | Reusable workflow: rebuilds the packages of an existing tag and keeps them as workflow run artifacts |
 | `plan/` | Action: works out the next version and, with `apply`, writes it into the manifest, `package.json` and `package-lock.json` |
 | `lint-commits/` | Action: fails when a commit in the push or pull request does not follow Conventional Commits |
 | `cws/` | Action: uploads a zip to the Chrome Web Store and submits it for review |
@@ -97,6 +98,43 @@ jobs:
       AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
       AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
 ```
+
+`.github/workflows/build.yml`, to build the Chrome and/or Firefox package of an existing tag without touching the release or the stores:
+
+```yaml
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, e.g. v0.2.0"
+        type: string
+        required: true
+      browser:
+        description: "Packages to build"
+        type: choice
+        options: [both, chrome, firefox]
+        default: both
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    uses: casteroid/webext-release/.github/workflows/build.yml@<sha> # vX.Y.Z
+    with:
+      tag: ${{ inputs.tag }}
+      manifest: app/manifest.json
+      package: npm run package
+      artifacts: packages/*
+      chrome-package: ${{ inputs.browser != 'firefox' && '*.chrome.zip' || '' }}
+      firefox-package: ${{ inputs.browser != 'chrome' && '*.firefox.xpi' || '' }}
+```
+
+The packages appear on the run page as the `chrome-vX.Y.Z` and `firefox-vX.Y.Z` artifacts. The run fails when the manifest at the tag does not say the tag's version, or when a selected pattern matches none of the built files.
 
 In CI, after a checkout with `fetch-depth: 0` and `actions/setup-node`:
 
