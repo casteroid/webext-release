@@ -118,7 +118,7 @@ Notes on the inputs:
 - any breaking change → major
 - otherwise any `feat` → minor
 - otherwise any `fix` or `perf` → patch
-- otherwise nothing to release; the run fails and says so
+- otherwise nothing to release: a real run fails and says so; a dry run passes and says so in the run summary
 
 The **bump** input overrides this (`patch`, `minor`, `major`). Before the first tag, the version already in the manifest is released unless a bump is given. **Dry run** prints the version and notes in the run summary and changes nothing.
 
