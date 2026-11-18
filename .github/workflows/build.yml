@@ -1,0 +1,126 @@
+name: Build
+
+# Reusable. Rebuilds the store packages of an existing release tag and keeps them as workflow run artifacts, without
+# touching the GitHub release or the stores. An extension calls it from a workflow_dispatch workflow. See README.md.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build, e.g. v0.2.0
+        type: string
+        required: true
+      manifest:
+        description: Path to the extension's manifest.json, e.g. app/manifest.json
+        type: string
+        required: true
+      package:
+        description: Command that builds the store packages, e.g. npm run package
+        type: string
+        required: true
+      artifacts:
+        description: Glob of the files the package command builds, e.g. packages/*
+        type: string
+        required: true
+      chrome-package:
+        description: File name pattern of the Chrome package, e.g. *.chrome.zip; empty skips Chrome
+        type: string
+        default: ""
+      firefox-package:
+        description: File name pattern of the Firefox package, e.g. *.firefox.xpi; empty skips Firefox
+        type: string
+        default: ""
+      node-version:
+        type: string
+        default: "22"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          CHROME_PACKAGE: ${{ inputs.chrome-package }}
+          FIREFOX_PACKAGE: ${{ inputs.firefox-package }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag \"$TAG\" is not a vX.Y.Z release tag."
+            exit 1
+          fi
+          if [ -z "$CHROME_PACKAGE" ] && [ -z "$FIREFOX_PACKAGE" ]; then
+            echo "::error::chrome-package and firefox-package are both empty, so there is nothing to build."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - name: Check manifest version
+        env:
+          TAG: ${{ inputs.tag }}
+          MANIFEST: ${{ inputs.manifest }}
+        run: |
+          version=$(jq -r '.version // empty' "$MANIFEST")
+          if [ "$version" != "${TAG#v}" ]; then
+            echo "::error::$MANIFEST at $TAG says version \"$version\", not ${TAG#v}."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Package
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: bash -c "$PACKAGE"
+
+      - name: Select packages
+        env:
+          ARTIFACTS: ${{ inputs.artifacts }}
+          CHROME_PACKAGE: ${{ inputs.chrome-package }}
+          FIREFOX_PACKAGE: ${{ inputs.firefox-package }}
+        run: |
+          shopt -s nullglob
+          # shellcheck disable=SC2206 # ARTIFACTS is a glob
+          files=($ARTIFACTS)
+          select_packages() {
+            local browser=$1 pattern=$2 found=0
+            [ -z "$pattern" ] && return
+            mkdir -p "$RUNNER_TEMP/packages/$browser"
+            for file in "${files[@]}"; do
+              # shellcheck disable=SC2053 # pattern is a glob
+              if [[ "$(basename "$file")" == $pattern ]]; then
+                cp "$file" "$RUNNER_TEMP/packages/$browser/"
+                found=1
+              fi
+            done
+            if [ "$found" -eq 0 ]; then
+              echo "::error::$browser package \"$pattern\" matches none of the files in \"$ARTIFACTS\" after the package step."
+              exit 1
+            fi
+          }
+          select_packages chrome "$CHROME_PACKAGE"
+          select_packages firefox "$FIREFOX_PACKAGE"
+
+      - name: Upload Chrome package
+        if: inputs.chrome-package != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: chrome-${{ inputs.tag }}
+          path: ${{ runner.temp }}/packages/chrome
+          if-no-files-found: error
+
+      - name: Upload Firefox package
+        if: inputs.firefox-package != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: firefox-${{ inputs.tag }}
+          path: ${{ runner.temp }}/packages/firefox
+          if-no-files-found: error
